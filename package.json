@@ -8,9 +8,12 @@
     "start": "next start"
   },
   "dependencies": {
+    "@strapi/blocks-react-renderer": "^1.0.2",
     "next": "^16.2.6",
     "postcss": "^8.5.14",
+    "qs": "^6.15.1",
     "react": "^19.2.6",
-    "react-dom": "^19.2.6"
+    "react-dom": "^19.2.6",
+    "react-icons": "^5.6.0"
   }
 }

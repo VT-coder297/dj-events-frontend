@@ -1,6 +1,13 @@
-/** @type {import('next').NextConfig} */
 const nextConfig = {
-  /* You can add regular config options here if needed */
+  reactStrictMode: true,
+  images: {
+    remotePatterns: [
+      {
+        protocol: 'https',
+        hostname: 'res.cloudinary.com',
+      },
+    ],
+  },
 };
 
 module.exports = nextConfig;
