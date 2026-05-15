@@ -10,7 +10,29 @@ import styles from '@/styles/Event.module.css';
 import { useRouter } from 'next/router';
 import { parseCookies } from '@/helpers/index';
 
-export default function EventPage({ evt, token }) {
+// 1. IMPORT THE NEXT DYNAMIC UTILITY LAYER
+import dynamic from 'next/dynamic';
+
+// 2. REPLACE YOUR STATIC IMPORT WITH THIS DYNAMIC CONFIGURATION
+const EventMap = dynamic(() => import('@/components/EventMap'), {
+  ssr: false, // Disables server-side pre-rendering completely
+  loading: () => (
+    <div
+      style={{
+        height: '500px',
+        background: '#f4f4f4',
+        borderRadius: '8px',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+      }}
+    >
+      <p>Loading Event Map Container...</p>
+    </div>
+  ),
+});
+
+export default function EventPage({ evt, token, coords }) {
   const router = useRouter();
 
   // 1. CRITICAL: Handle the background page generation state safely
@@ -134,6 +156,10 @@ export default function EventPage({ evt, token }) {
         <h3>Venue: {evt.venue || 'TBD'}</h3>
         <p>{evt.address || 'Address unavailable'}</p>
 
+        {/* 2. Place the component here and pass the flat event object down */}
+        <h2>Location Map</h2>
+        <EventMap coords={coords} />
+
         <Link href="/events" className={styles.back}>
           {'<'} Go Back
         </Link>
@@ -142,33 +168,33 @@ export default function EventPage({ evt, token }) {
   );
 }
 
-export async function getStaticPaths() {
-  try {
-    const res = await fetch(`${API_URL}/api/events`);
-    const json = await res.json();
+// export async function getStaticPaths() {
+//   try {
+//     const res = await fetch(`${API_URL}/api/events`);
+//     const json = await res.json();
 
-    if (!json.data || !Array.isArray(json.data)) {
-      return { paths: [], fallback: 'blocking' };
-    }
+//     if (!json.data || !Array.isArray(json.data)) {
+//       return { paths: [], fallback: 'blocking' };
+//     }
 
-    const paths = json.data
-      .filter((evt) => evt && evt.slug)
-      .map((evt) => ({
-        params: { slug: String(evt.slug) },
-      }));
+//     const paths = json.data
+//       .filter((evt) => evt && evt.slug)
+//       .map((evt) => ({
+//         params: { slug: String(evt.slug) },
+//       }));
 
-    return {
-      paths,
-      // FIXED: Set fallback to 'blocking' to completely eliminate runtime 404 ENOENT page loading bugs
-      fallback: 'blocking',
-    };
-  } catch (error) {
-    console.error('Error fetching static paths:', error);
-    return { paths: [], fallback: 'blocking' };
-  }
-}
+//     return {
+//       paths,
+//       // FIXED: Set fallback to 'blocking' to completely eliminate runtime 404 ENOENT page loading bugs
+//       fallback: 'blocking',
+//     };
+//   } catch (error) {
+//     console.error('Error fetching static paths:', error);
+//     return { paths: [], fallback: 'blocking' };
+//   }
+// }
 
-export async function getStaticProps({ params: { slug }, req }) {
+export async function getServerSideProps({ params: { slug }, req }) {
   try {
     const cookies = parseCookies(req);
     const token = cookies.token || null;
@@ -177,23 +203,76 @@ export async function getStaticProps({ params: { slug }, req }) {
       `${API_URL}/api/events?filters[slug][$eq]=${slug}&populate=*`,
     );
     const json = await res.json();
+    const evt = json.data && json.data.length > 0 ? json.data[0] : null;
+
+    let coords = null;
+
+    if (evt && evt.address) {
+      try {
+        // 1. Clean the address string: Remove erratic newlines or excessive layout spacing
+        const cleanAddress = evt.address.replace(/[\r\n]+/g, ' ').trim();
+        const encodedAddress = encodeURIComponent(cleanAddress);
+
+        const openStreetUrl = `https://nominatim.openstreetmap.org/search?q=${encodedAddress}&format=json&limit=1`;
+
+        // 2. CRITICAL POLICY FIX: Use an explicit Accept header and a truly UNIQUE app identifier string
+        const geoRes = await fetch(openStreetUrl, {
+          method: 'GET',
+          headers: {
+            Accept: 'application/json',
+            'User-Agent': `DJ-Events-App-Tmot-Instance-${evt.documentId}`, // Makes the header 100% unique to prevent shared blocks
+          },
+        });
+
+        // 3. SECURE GUARD CLAUSE: Only attempt to parse if the server gives a clean 200 OK code
+        if (geoRes.ok) {
+          const geoData = await geoRes.json();
+
+          if (geoData && Array.isArray(geoData) && geoData.length > 0) {
+            coords = {
+              lat: parseFloat(geoData[0].lat),
+              lng: parseFloat(geoData[0].lon), // OpenStreetMap uses 'lon' instead of 'lng'
+            };
+            // console.log(coords);
+            console.log(
+              `[Geocoding Success] Resolved coordinates for: ${cleanAddress}`,
+            );
+          } else {
+            console.warn(
+              `[Geocoding Notice] No coordinates found for address: ${cleanAddress}`,
+            );
+          }
+        } else {
+          const fallbackText = await geoRes.text();
+          console.error(
+            `[Geocoding Error] Nominatim returned status ${geoRes.status}:`,
+            fallbackText.slice(0, 100),
+          );
+        }
+      } catch (geoInnerError) {
+        // Keeps the parent page compilation intact even if the external mapping server drops connections
+        console.error(
+          'Inner geocoding extraction step encountered an error:',
+          geoInnerError,
+        );
+      }
+    }
 
     return {
       props: {
-        // FIXED FOR STRAPI V5: Unpacks data array position 0 to provide a flat object to the component layout
-        evt: json.data && json.data.length > 0 ? json.data[0] : null,
+        evt,
         token,
+        coords, // Safely returns coordinates or null without crashing the whole application view
       },
-      revalidate: 1,
     };
   } catch (error) {
-    console.error('Error fetching event details:', error);
+    console.error('Failure executing server-side data extraction:', error);
     return {
       props: {
         evt: null,
         token: null,
+        coords: null,
       },
-      revalidate: 1,
     };
   }
 }
