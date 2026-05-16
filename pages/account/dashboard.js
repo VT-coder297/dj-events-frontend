@@ -61,7 +61,6 @@ export async function getServerSideProps({ req }) {
   const cookies = parseCookies(req);
   const token = cookies.token || null;
 
-  // 1. Kick unauthenticated users away immediately if cookie is missing
   if (!token) {
     return {
       redirect: {
@@ -71,34 +70,43 @@ export async function getServerSideProps({ req }) {
     };
   }
 
-  // 2. Fetch the current logged-in user profile
-  const userRes = await fetch(`${API_URL}/api/users/me`, {
-    headers: { Authorization: `Bearer ${token}` },
-  });
+  // Fetch user profile alongside its associated events array
+  const userRes = await fetch(
+    `${API_URL}/api/users/me?populate[events][populate]=image`,
+    {
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+    },
+  );
 
   if (!userRes.ok) {
     return {
-      redirect: { destination: '/account/login', permanent: false },
+      redirect: {
+        destination: '/account/login',
+        permanent: false,
+      },
     };
   }
 
   const user = await userRes.json();
+  const rawEvents = user.events || [];
 
-  // 3. CORRECT STRAPI V5 RELATIONAL FILTER FOR NUMERIC IDS:
-  // Using filters[user][id][$eq] works perfectly in Strapi v5 *provided* that
-  // your backend permissions allow the Authenticated user role to read relationship contexts.
-  const eventsRes = await fetch(
-    `${API_URL}/api/events?filters[user][id][$eq]=${user.id}&status=published&populate=*`,
-    {
-      headers: { Authorization: `Bearer ${token}` },
-    },
-  );
-
-  const json = await eventsRes.json();
+  // FIXED FOR STRAPI V5: Deduplicate the array by tracking unique documentIds.
+  // This automatically strips out the hidden internal Draft duplicates.
+  const seenIds = new Set();
+  const uniqueEvents = rawEvents.filter((evt) => {
+    // If the item doesn't have a documentId, or we already processed it, skip it
+    if (!evt.documentId || seenIds.has(evt.documentId)) {
+      return false;
+    }
+    seenIds.add(evt.documentId);
+    return true;
+  });
 
   return {
     props: {
-      events: json.data || [],
+      events: uniqueEvents,
       token,
     },
   };
